@@ -17,6 +17,9 @@ type GobCodec struct {
 var _ Codec = (*GobCodec)(nil)
 
 func NewGobCodec(conn io.ReadWriteCloser) Codec {
+	//encoder 因为是要往 conn 中写入内容, 可以使用 buffer 来优化写入效率, 所以我们先写入到 buffer 中,
+	//然后我们再调用 buffer.Flush() 来将 buffer 中的全部内容写入到 conn 中, 从而优化效率.
+	//对于读则不需要这方面的考虑, 所以直接在 conn 中读内容即可.
 	buf := bufio.NewWriter(conn)
 	return &GobCodec{
 		conn: conn,
@@ -36,7 +39,7 @@ func (c *GobCodec) ReadBody(body interface{}) error {
 }
 
 func (c *GobCodec) Write(header *Header, body interface{}) (err error) {
-	//编码并写入buf
+	//调用 buffer.Flush() 来将 buffer 中的全部内容写入到 conn 中, 从而优化效率.
 	defer func() {
 		c.buf.Flush()
 		if err != nil {

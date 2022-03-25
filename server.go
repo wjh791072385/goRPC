@@ -126,10 +126,14 @@ type request struct {
 
 func (s *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	var h codec.Header
+
 	if err := cc.ReadHeader(&h); err != nil {
 		if err != io.EOF && err != io.ErrUnexpectedEOF {
 			log.Println("rpc server: read header error:", err)
 		}
+
+		log.Println("rpc server : readRequestHeader failed")
+
 		return nil, err
 	}
 	return &h, nil
@@ -162,7 +166,7 @@ func (s *Server) sendResponse(cc codec.Codec, h *codec.Header, body interface{},
 
 func (s *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
 	defer wg.Done()
-	log.Println(req.h, req.argv.Elem())
+	log.Println("rpc server handleRequest:", req.h, req.argv.Elem())
 	req.replyv = reflect.ValueOf(fmt.Sprintf("gorpc resp %d", req.h.Seq))
 	s.sendResponse(cc, req.h, req.replyv.Interface(), sending)
 }
