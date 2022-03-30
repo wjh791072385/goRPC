@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,10 +13,6 @@ import (
 
 	goRPC "github.com/wjh791072385/gorpc"
 )
-
-type Iej struct {
-	i string
-}
 
 // 测试主流程 server端
 func TestServer(t *testing.T) {
@@ -28,7 +25,7 @@ func TestServer(t *testing.T) {
 }
 
 // 模拟客户端进行测试
-func TestClient(t *testing.T) {
+func TestClientSimulate(t *testing.T) {
 	conn, _ := net.Dial("tcp", "localhost:10010")
 	defer conn.Close()
 
@@ -72,28 +69,33 @@ func startServer(addr chan string) {
 	goRPC.Accept(l)
 }
 
+// 测试客户端
 func TestStandard(t *testing.T) {
+	//启动服务端
 	addr := make(chan string)
 	go startServer(addr)
 
-	conn, _ := net.Dial("tcp", <-addr)
-	defer func() { _ = conn.Close() }()
+	//启动客户端,采用默认option
+	client, err := goRPC.Dial("tcp", <-addr)
+	defer client.Close()
 
-	time.Sleep(time.Second)
-	// send options
-	_ = json.NewEncoder(conn).Encode(goRPC.DefaultOption)
-	cc := codec.NewGobCodec(conn)
-	// send request & receive response
-	for i := 0; i < 5; i++ {
-		h := &codec.Header{
-			ServiceMethod: "Algorithm.Sum",
-			Seq:           uint64(i),
-		}
-		_ = cc.Write(h, fmt.Sprintf("gorpc req %d", h.Seq))
-		_ = cc.ReadHeader(h)
-		var reply string
-		_ = cc.ReadBody(&reply)
-		log.Println("reply:", reply)
+	if err != nil {
+		log.Println("client start error")
 	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := fmt.Sprintf("geerpc req %d", i)
+			var reply string
+			if err := client.Call("Foo.Sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error:", err)
+			}
+			log.Println("reply:", reply)
+		}(i)
+	}
+	wg.Wait()
 
 }

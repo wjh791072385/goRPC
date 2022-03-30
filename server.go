@@ -23,13 +23,13 @@ const DefaultMagicNumber = 0x3bef5c
 //具体连接中的报文 | Option | Header1 | Body1 | Header2 | Body2 | ...
 
 type Option struct {
-	MagicNumber int
-	CodeType    codec.Type
+	MagicNumber int //标识请求类型，DefaultMagicNumber表示rpc请求
+	CodecType   codec.Type
 }
 
 var DefaultOption = &Option{
 	MagicNumber: DefaultMagicNumber,
-	CodeType:    codec.GobType,
+	CodecType:   codec.GobType,
 }
 
 // Server 服务端实现
@@ -78,7 +78,7 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		return
 	}
 
-	f := codec.NewCodeFuncMap[opt.CodeType]
+	f := codec.NewCodeFuncMap[opt.CodecType]
 	if f == nil {
 		log.Println("rpc server : invalid CodeType")
 		return
