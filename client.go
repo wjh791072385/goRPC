@@ -306,4 +306,5 @@ func (client *Client) Call(ctx context.Context, serviceMethod string, args, repl
 		//return fmt.Errorf("rpc client : call timeout %s", call.Error.Error())  //call.Error为空报错
 		return fmt.Errorf("rpc client : call timeout %s %d", call.ServiceMethod, call.Seq)
 	}
+
 }

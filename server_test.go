@@ -1,6 +1,7 @@
 package goRPC_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -90,7 +91,7 @@ func TestStandard(t *testing.T) {
 			defer wg.Done()
 			args := fmt.Sprintf("geerpc req %d", i)
 			var reply string
-			if err := client.Call("Foo.Sum", args, &reply); err != nil {
+			if err := client.Call(context.Background(), "Foo.Sum", args, &reply); err != nil {
 				log.Fatal("call Foo.Sum error:", err)
 			}
 			log.Println("reply:", reply)
