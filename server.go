@@ -3,12 +3,15 @@ package goRPC
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wjh791072385/gorpc/codec"
 )
@@ -24,13 +27,16 @@ const DefaultMagicNumber = 0x3bef5c
 //具体连接中的报文 | Option | Header1 | Body1 | Header2 | Body2 | ...
 
 type Option struct {
-	MagicNumber int //标识请求类型，DefaultMagicNumber表示rpc请求
-	CodecType   codec.Type
+	MagicNumber    int //标识请求类型，DefaultMagicNumber表示rpc请求
+	CodecType      codec.Type
+	ConnectTimeout time.Duration //规定0表示不限制超时时间
+	HandleTimeout  time.Duration
 }
 
 var DefaultOption = &Option{
-	MagicNumber: DefaultMagicNumber,
-	CodecType:   codec.GobType,
+	MagicNumber:    DefaultMagicNumber,
+	CodecType:      codec.GobType, //默认采用gdb
+	ConnectTimeout: time.Second * 10,
 }
 
 // Server 服务端实现
@@ -60,6 +66,43 @@ func (server *Server) Accept(lis net.Listener) {
 // Accept 封装一层，方便外部调用
 func Accept(lis net.Listener) { DefaultServer.Accept(lis) }
 
+// 支持HTTP
+const (
+	connected        = "200 connected to goRPC" //成功连接的msg
+	defaultRPCPath   = "/gorpc/"                //标识rpc访问路径的前缀，比如192.168.1.1:8888/gorpc/Algorithm.Sum
+	defaultDebugPath = "/debug/gorpc"           //用于测试
+)
+
+//接收http请求
+func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "CONNECT" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(w, "405 must CONNECT\n")
+		return
+	}
+
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		log.Print("rpc hijacking ", req.RemoteAddr, ": ", err.Error())
+		return
+	}
+
+	_, _ = io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
+	server.ServeConn(conn)
+}
+
+// HandleHTTP 对默认的rpc路径做出相应的响应
+func (server *Server) HandleHTTP() {
+	http.Handle(defaultRPCPath, server) //Server实现了ServeHTTP方法，即实现了handler接口
+	//http.HandleFunc()
+}
+
+// HandleHTTP 对外暴露，采用默认defaultServer
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
+}
+
 // ServeConn 核心处理逻辑
 func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	// 首先使用 json.NewDecoder 反序列化得到 Option 实例，检查 MagicNumber 和 CodeType 的值是否正确。
@@ -88,7 +131,7 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	}
 
 	//这里如果opt.CodeType = "application/gob"，那么f(conn)其实返回的是一个实现Codec接口的GobCodec实例
-	server.serveCodec(f(conn))
+	server.serveCodec(f(conn), &opt)
 }
 
 func (server *Server) Register(rcvr interface{}) error {
@@ -140,7 +183,7 @@ var invalidRequest = struct{}{}
 //读取请求 readRequest
 //处理请求 handleRequest
 //回复请求 sendResponse
-func (server *Server) serveCodec(cc codec.Codec) {
+func (server *Server) serveCodec(cc codec.Codec, opt *Option) {
 	sending := new(sync.Mutex) //确保发送一个完整的响应
 	wg := new(sync.WaitGroup)  //确保所有请求被处理
 
@@ -157,7 +200,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 		wg.Add(1)
 
 		//使其不阻塞，for循环处理请求
-		go server.handleRequest(cc, req, sending, wg)
+		go server.handleRequest(cc, req, sending, wg, opt.HandleTimeout)
 	}
 
 	wg.Wait()
@@ -203,7 +246,7 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	req.argv = req.mtype.newArgv()
 	req.replyv = req.mtype.newReplyv()
 
-	// argv和argvi指向一个地址，确保argvi是指针类型，因为readbody需要传入指针类型，来进行赋值
+	// argv和argvi指向一个interface，确保argvi是指针类型，因为readbody需要传入指针类型，来进行赋值
 	argvi := req.argv.Interface()
 	if req.argv.Type().Kind() != reflect.Ptr {
 		argvi = req.argv.Addr().Interface()
@@ -224,15 +267,39 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 	}
 }
 
-func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
 	defer wg.Done()
 
-	err := req.svc.call(req.mtype, req.argv, req.replyv) //调用call方法，结果写入到replyv中
-	if err != nil {
-		req.h.Error = err.Error()
-		server.sendResponse(cc, req.h, invalidRequest, sending)
+	//用于超时控制
+	called := make(chan struct{})
+	sent := make(chan struct{})
+
+	go func() {
+		err := req.svc.call(req.mtype, req.argv, req.replyv) //调用call方法，结果写入到replyv中
+		called <- struct{}{}
+		if err != nil {
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			sent <- struct{}{}
+			return
+		}
+
+		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+		sent <- struct{}{}
+	}()
+
+	//timeout为0表示不做限制
+	if timeout == 0 {
+		<-called
+		<-sent
 		return
 	}
 
-	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+	select {
+	case <-time.After(timeout):
+		req.h.Error = fmt.Sprintf("rpc server: request handle timeout: expect within %s", timeout)
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+	case <-called:
+		<-sent
+	}
 }

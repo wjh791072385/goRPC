@@ -1,13 +1,17 @@
 package goRPC
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/wjh791072385/gorpc/codec"
 )
@@ -96,6 +100,23 @@ func (client *Client) terminateCalls(err error) {
 	}
 }
 
+// NewHTTPClient 支持HTTP
+func NewHTTPClient(conn net.Conn, opt *Option) (*Client, error) {
+	_, _ = io.WriteString(conn, fmt.Sprintf("CONNECT %s HTTP/1.0\n\n", defaultRPCPath))
+
+	//发送connect请求，接收响应
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+	if err == nil && resp.Status == connected {
+		return NewClient(conn, opt)
+	}
+
+	if err == nil {
+		err = errors.New("unexpected HTTP response: " + resp.Status)
+	}
+	return nil, err
+
+}
+
 // NewClient 初始化Client对象，传出conn和opt
 func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	//当前只支持gob编码
@@ -163,25 +184,49 @@ func (client *Client) receive() {
 	client.terminateCalls(err)
 }
 
-func Dial(network, address string, opts ...*Option) (*Client, error) {
+type clientResult struct {
+	client *Client
+	err    error
+}
+
+func Dial(network, address string, opts ...*Option) (cli *Client, err error) {
 	opt, err := parseOptions(opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := net.Dial(network, address)
+	conn, err := net.DialTimeout(network, address, opt.ConnectTimeout)
 	if err != nil {
 		return nil, err
 	}
 
-	cli, err := NewClient(conn, opt)
+	defer func() {
+		//最终err还是不为空的话，关闭连接
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
 
-	if cli == nil {
-		_ = conn.Close()
-		return nil, err
+	//创建channel用于超时处理
+	ch := make(chan clientResult)
+	go func() {
+		cli, err = NewClient(conn, opt)
+		ch <- clientResult{client: cli, err: nil}
+	}()
+
+	//ConnectTimeout=0表示不需要超时处理
+	if opt.ConnectTimeout == 0 {
+		res := <-ch
+		return res.client, res.err
 	}
 
-	return cli, nil
+	//通过select处理超时
+	select {
+	case <-time.After(opt.ConnectTimeout):
+		return nil, fmt.Errorf("rpc client: connect timeout: expect within %s", opt.ConnectTimeout)
+	case res := <-ch:
+		return res.client, res.err
+	}
 }
 
 // 将opt变为可选参数，初始化摸男人参数
@@ -249,7 +294,16 @@ func (client *Client) Go(serviceMethod string, args, reply interface{}, done cha
 }
 
 // Call 同步调用方法，等待call完成
-func (client *Client) Call(serviceMethod string, args, reply interface{}) error {
-	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	return call.Error
+func (client *Client) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
+	//call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
+	call := client.Go(serviceMethod, args, reply, make(chan *Call, 1))
+	select {
+	case c := <-call.Done:
+		return c.Error
+	case <-ctx.Done():
+		//超时的话，需要移除该call
+		call = client.removeCall(call.Seq)
+		//return fmt.Errorf("rpc client : call timeout %s", call.Error.Error())  //call.Error为空报错
+		return fmt.Errorf("rpc client : call timeout %s %d", call.ServiceMethod, call.Seq)
+	}
 }
