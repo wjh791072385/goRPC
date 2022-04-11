@@ -22,7 +22,7 @@ type Discovery interface {
 	GetAll() ([]string, error)           //返回所有服务实例
 }
 
-// MultiServersDiscovery 实现一个不需要注册中心，服务列表由手工维护的服务发现的结构体,用于测试负载均衡
+// MultiServersDiscovery 实现一个不需要注册中心，服务列表由手工维护的服务发现的结构体,用于测试负载均衡，模拟
 type MultiServersDiscovery struct {
 	r       *rand.Rand // 随机数产生
 	mu      sync.RWMutex

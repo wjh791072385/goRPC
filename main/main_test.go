@@ -1,18 +1,20 @@
-package main
+package main_test
 
 import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"sync"
+	"testing"
 	"time"
 
-	"github.com/wjh791072385/gorpc/registry"
-
 	goRPC "github.com/wjh791072385/gorpc"
+	"github.com/wjh791072385/gorpc/registry"
 	"github.com/wjh791072385/gorpc/xclient"
 )
 
+//辅助测试
 type Foo int
 
 type Args struct{ Num1, Num2 int }
@@ -46,12 +48,12 @@ func foo(xc *xclient.XClient, ctx context.Context, typ, serviceMethod string, ar
 }
 
 //注册中心相关测试
-//func startRegistry(wg *sync.WaitGroup) {
-//	l, _ := net.Listen("tcp", ":9999")
-//	registry.HandleHTTP() //注册路由，默认路径是/gorpc/registry
-//	wg.Done()
-//	_ = http.Serve(l, nil)
-//}
+func startRegistry(wg *sync.WaitGroup) {
+	l, _ := net.Listen("tcp", ":9999")
+	registry.HandleHTTP() //注册路由，默认路径是/gorpc/registry
+	wg.Done()
+	_ = http.Serve(l, nil)
+}
 
 func startServer(registryAddr string, wg *sync.WaitGroup) {
 	var foo Foo
@@ -59,7 +61,7 @@ func startServer(registryAddr string, wg *sync.WaitGroup) {
 	server := goRPC.NewServer()
 	_ = server.Register(&foo)
 	//registry.Heartbeat(registryAddr, "tcp@"+l.Addr().String(), 0)  //没做tcp协议区分，直接传addr即可
-	registry.Heartbeat(registryAddr, l.Addr().String(), 0) //相当于服务端在注册中心进行注册
+	registry.Heartbeat(registryAddr, l.Addr().String(), 0)
 	wg.Done()
 	server.Accept(l)
 }
@@ -98,24 +100,17 @@ func broadcast(registry string) {
 	wg.Wait()
 }
 
-func main() {
+func TestHeartbeat(t *testing.T) {
 	log.SetFlags(0)
 	registryAddr := "http://localhost:9999/gorpc/registry"
 	var wg sync.WaitGroup
-	//wg.Add(1)
-	//go startRegistry(&wg)  //单独在其他地方运行
-	//wg.Wait()
 
 	time.Sleep(time.Second)
-	wg.Add(2)
-	go startServer(registryAddr, &wg)
+	wg.Add(1)
 	go startServer(registryAddr, &wg)
 
 	wg.Wait()
 
-	time.Sleep(time.Second)
-	call(registryAddr)
+	select {}
 
-	//select {}
-	broadcast(registryAddr)
 }

@@ -2,6 +2,7 @@ package xclient
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"reflect"
 	"sync"
@@ -60,7 +61,7 @@ func (xc *XClient) dial(addr string) (*goRPC.Client, error) {
 func (xc *XClient) call(rpcAddr string, ctx context.Context, serviceMethod string, args, reply interface{}) error {
 	client, err := xc.dial(rpcAddr)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s is disabled, err : %s", rpcAddr, err)
 	}
 	return client.Call(ctx, serviceMethod, args, reply)
 }
@@ -68,6 +69,7 @@ func (xc *XClient) call(rpcAddr string, ctx context.Context, serviceMethod strin
 // Call 通过实现已经实现的Dicover接口中的get方法，得到可用的服务地址
 func (xc *XClient) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
 	rpcAddr, err := xc.d.Get(xc.mode)
+	//log.Println("selected rpcAddr : ", rpcAddr)
 	if err != nil {
 		return err
 	}

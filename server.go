@@ -221,8 +221,7 @@ func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 		if err != io.EOF && err != io.ErrUnexpectedEOF {
 			log.Println("rpc server: read header error:", err)
 		}
-		log.Println("rpc server : readRequestHeader failed")
-
+		log.Println("rpc server : readRequestHeader failed, err : ", err)
 		return nil, err
 	}
 	return &h, nil
